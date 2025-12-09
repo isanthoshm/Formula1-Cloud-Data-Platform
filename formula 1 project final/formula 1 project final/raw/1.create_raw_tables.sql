@@ -1,3 +1,5 @@
+# MAGIC %run "../includes/configuration"
+  
 -- Databricks notebook source
 CREATE DATABASE IF NOT EXISTS f1_raw;
 
@@ -25,7 +27,7 @@ alt INT,
 url STRING
 )
 USING csv
-OPTIONS (path "/mnt/formula1dl/raw/circuits.csv", header true)
+OPTIONS (path "{raw_folder_path}/circuits.csv", header true)
 
 -- COMMAND ----------
 
@@ -48,7 +50,7 @@ date DATE,
 time STRING,
 url STRING)
 USING csv
-OPTIONS (path "/mnt/formula1dl/raw/races.csv", header true)
+OPTIONS (path "{raw_folder_path}/raw/races.csv", header true)
 
 -- COMMAND ----------
 
@@ -76,7 +78,7 @@ name STRING,
 nationality STRING,
 url STRING)
 USING json
-OPTIONS(path "/mnt/formula1dl/raw/constructors.json")
+OPTIONS(path "{raw_folder_path}/raw/constructors.json")
 
 -- COMMAND ----------
 
@@ -102,7 +104,7 @@ dob DATE,
 nationality STRING,
 url STRING)
 USING json
-OPTIONS (path "/mnt/formula1dl/raw/drivers.json")
+OPTIONS (path "{raw_folder_path}/raw/drivers.json")
 
 -- COMMAND ----------
 
@@ -132,7 +134,7 @@ fastestLapTime STRING,
 fastestLapSpeed FLOAT,
 statusId STRING)
 USING json
-OPTIONS(path "/mnt/formula1dl/raw/results.json")
+OPTIONS(path "{raw_folder_path}/raw/results.json")
 
 -- COMMAND ----------
 
@@ -157,7 +159,7 @@ raceId INT,
 stop INT,
 time STRING)
 USING json
-OPTIONS(path "/mnt/formula1dl/raw/pit_stops.json", multiLine true)
+OPTIONS(path "{raw_folder_path}/raw/pit_stops.json", multiLine true)
 
 -- COMMAND ----------
 
@@ -187,7 +189,7 @@ time STRING,
 milliseconds INT
 )
 USING csv
-OPTIONS (path "/mnt/formula1dl/raw/lap_times")
+OPTIONS (path "{raw_folder_path}/raw/lap_times")
 
 -- COMMAND ----------
 
@@ -215,7 +217,7 @@ q3 STRING,
 qualifyId INT,
 raceId INT)
 USING json
-OPTIONS (path "/mnt/formula1dl/raw/qualifying", multiLine true)
+OPTIONS (path "{raw_folder_path}/raw/qualifying", multiLine true)
 
 -- COMMAND ----------
 
