@@ -15,7 +15,7 @@
 
 results_df = spark.read \
 .option("inferSchema", True) \
-.json("/mnt/formula1dl/raw/2021-03-28/results.json")
+.json("{raw_folder_path}/raw/2021-03-28/results.json")
 
 # COMMAND ----------
 
