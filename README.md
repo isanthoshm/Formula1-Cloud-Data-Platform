@@ -1,5 +1,5 @@
 # Formula 1 Cloud Data Platform
-## 1. Project Title & Introduction
+## 1. Introduction
 
 One-Liner: A complete, end-to-end Data Lakehouse solution built on Azure and Databricks to analyze Formula 1 historical performance and identify dominant drivers/teams.
 
