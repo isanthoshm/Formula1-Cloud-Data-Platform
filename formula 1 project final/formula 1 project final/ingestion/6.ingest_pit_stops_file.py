@@ -1,3 +1,66 @@
+import org.apache.spark.sql.*;
+import org.apache.spark.sql.types.*;
+import static org.apache.spark.sql.functions.*;
+
+public class IngestPitStops {
+    public static void main(String[] args) {
+
+        // Initialize Spark Session
+        SparkSession spark = SparkSession.builder()
+                .appName("IngestPitStops")
+                .getOrCreate();
+
+        // Parameters
+        String vDataSource = spark.conf().get("p_data_source", "");
+        String vFileDate = spark.conf().get("p_file_date", "2021-03-28");
+        String rawFolderPath = "wasbs://raw@formula420.blob.core.windows.net";
+        String processedFolderPath = "wasbs://processed@formula420.blob.core.windows.net";
+
+        // ##### Step 1 - Define Schema
+        StructType pitStopsSchema = new StructType(new StructField[]{
+                DataTypes.createStructField("raceId", DataTypes.IntegerType, false),
+                DataTypes.createStructField("driverId", DataTypes.IntegerType, true),
+                DataTypes.createStructField("stop", DataTypes.StringType, true),
+                DataTypes.createStructField("lap", DataTypes.IntegerType, true),
+                DataTypes.createStructField("time", DataTypes.StringType, true),
+                DataTypes.createStructField("duration", DataTypes.StringType, true),
+                DataTypes.createStructField("milliseconds", DataTypes.IntegerType, true)
+        });
+
+        // Read the JSON file with multiLine option
+        Dataset<Row> pitStopsDf = spark.read()
+                .schema(pitStopsSchema)
+                .option("multiLine", true) // Crucial for multi-line JSON arrays
+                .json(rawFolderPath + "/" + vFileDate + "/pit_stops.json");
+
+        // ##### Step 2 - Rename Columns and Add Metadata
+        Dataset<Row> finalDf = SparkUtils.addIngestionDate(pitStopsDf)
+                .withColumnRenamed("driverId", "driver_id")
+                .withColumnRenamed("raceId", "race_id")
+                .withColumn("data_source", lit(vDataSource))
+                .withColumn("file_date", lit(vFileDate));
+
+        // ##### Step 3 - Delta Merge
+        // Condition: Unique key is a combination of race, driver, and the stop number
+        String mergeCondition = "tgt.race_id = src.race_id AND " +
+                                "tgt.driver_id = src.driver_id AND " +
+                                "tgt.stop = src.stop";
+
+        SparkUtils.mergeDeltaData(
+            spark, 
+            finalDf, 
+            "f1_processed", 
+            "pit_stops", 
+            processedFolderPath, 
+            mergeCondition, 
+            "race_id"
+        );
+
+        System.out.println("Pit Stops Ingestion and Merge Successful");
+        spark.stop();
+    }
+}
+
 # Databricks notebook source
 # MAGIC %md
 # MAGIC ### Ingest pit_stops.json file
