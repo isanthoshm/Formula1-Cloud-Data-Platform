@@ -1,3 +1,70 @@
+import org.apache.spark.sql.*;
+import org.apache.spark.sql.expressions.Window;
+import org.apache.spark.sql.expressions.WindowSpec;
+import static org.apache.spark.sql.functions.*;
+import java.util.List;
+
+public class TransformConstructorStandings {
+    public static void main(String[] args) {
+
+        SparkSession spark = SparkSession.builder()
+                .appName("TransformConstructorStandings")
+                .getOrCreate();
+
+        // Parameters
+        String vFileDate = spark.conf().get("p_file_date", "2021-03-28");
+        String presentationPath = "wasbs://presentation@formula420.blob.core.windows.net";
+
+        // ##### Step 1 - Find race years to reprocess
+        Dataset<Row> raceResultsDf = spark.read().format("delta").load(presentationPath + "/race_results");
+        
+        // Extract distinct years affected by the current file_date
+        List<Integer> raceYearList = raceResultsDf
+                .filter(col("file_date").equalTo(vFileDate))
+                .select("race_year")
+                .distinct()
+                .as(Encoders.INT())
+                .collectAsList();
+
+        // ##### Step 2 - Filter data for those specific years
+        // We convert the Java List to an array for the isin function
+        Dataset<Row> filteredResultsDf = raceResultsDf
+                .filter(col("race_year").isin(raceYearList.toArray()));
+
+        // ##### Step 3 - Aggregate Team Performance
+        Dataset<Row> constructorStandingsDf = filteredResultsDf
+                .groupBy("race_year", "team")
+                .agg(
+                    sum("points").alias("total_points"),
+                    count(when(col("position").equalTo(1), true)).alias("wins")
+                );
+
+        // ##### Step 4 - Rank Constructors within each Season
+        // Order by total_points DESC, then wins DESC to break ties
+        WindowSpec constructorRankSpec = Window.partitionBy("race_year")
+                .orderBy(desc("total_points"), desc("wins"));
+
+        Dataset<Row> finalDf = constructorStandingsDf
+                .withColumn("rank", rank().over(constructorRankSpec));
+
+        // ##### Step 5 - Delta Merge to Presentation Layer
+        String mergeCondition = "tgt.team = src.team AND tgt.race_year = src.race_year";
+
+        SparkUtils.mergeDeltaData(
+            spark, 
+            finalDf, 
+            "f1_presentation", 
+            "constructor_standings", 
+            presentationPath, 
+            mergeCondition, 
+            "race_year"
+        );
+
+        System.out.println("Constructor Standings Transformation Completed Successfully.");
+        spark.stop();
+    }
+}
+
 # Databricks notebook source
 # MAGIC %md
 # MAGIC ##### Produce constructor standings
