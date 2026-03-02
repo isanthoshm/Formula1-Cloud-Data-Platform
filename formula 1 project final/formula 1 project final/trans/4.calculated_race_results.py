@@ -1,3 +1,72 @@
+import org.apache.spark.sql.*;
+import static org.apache.spark.sql.functions.*;
+import io.delta.tables.*;
+
+public class TransformCalculatedRaceResults {
+    public static void main(String[] args) {
+
+        SparkSession spark = SparkSession.builder()
+                .appName("TransformCalculatedRaceResults")
+                .getOrCreate();
+
+        // Parameters
+        String vFileDate = spark.conf().get("p_file_date", "2021-03-21");
+
+        // ##### Step 1 - Create the Target Delta Table if it doesn't exist
+        spark.sql("CREATE TABLE IF NOT EXISTS f1_presentation.calculated_race_results (" +
+                "race_year INT, team_name STRING, driver_id INT, driver_name STRING, " +
+                "race_id INT, position INT, points INT, calculated_points INT, " +
+                "created_date TIMESTAMP, updated_date TIMESTAMP) USING DELTA");
+
+        // ##### Step 2 - Prepare Source Data (Calculated Results)
+        // We calculate points as: 11 - position
+        Dataset<Row> updatesDf = spark.read().table("f1_processed.results")
+                .filter(col("file_date").equalTo(vFileDate).and(col("position").leq(10)))
+                .join(spark.read().table("f1_processed.drivers"), "driver_id")
+                .join(spark.read().table("f1_processed.constructors"), "constructor_id")
+                .join(spark.read().table("f1_processed.races"), "race_id")
+                .select(
+                    col("races.race_year"),
+                    col("constructors.name").as("team_name"),
+                    col("drivers.driver_id"),
+                    col("drivers.name").as("driver_name"),
+                    col("races.race_id"),
+                    col("results.position"),
+                    col("results.points"),
+                    expr("11 - results.position").as("calculated_points")
+                );
+
+        // ##### Step 3 - Perform Delta Merge
+        DeltaTable targetTable = DeltaTable.forName(spark, "f1_presentation.calculated_race_results");
+
+        targetTable.as("tgt")
+            .merge(updatesDf.as("upd"), "tgt.driver_id = upd.driver_id AND tgt.race_id = upd.race_id")
+            .whenMatched()
+                .updateExpr(new java.util.HashMap<String, String>() {{
+                    put("position", "upd.position");
+                    put("points", "upd.points");
+                    put("calculated_points", "upd.calculated_points");
+                    put("updated_date", "current_timestamp()");
+                }})
+            .whenNotMatched()
+                .insertExpr(new java.util.HashMap<String, String>() {{
+                    put("race_year", "upd.race_year");
+                    put("team_name", "upd.team_name");
+                    put("driver_id", "upd.driver_id");
+                    put("driver_name", "upd.driver_name");
+                    put("race_id", "upd.race_id");
+                    put("position", "upd.position");
+                    put("points", "upd.points");
+                    put("calculated_points", "upd.calculated_points");
+                    put("created_date", "current_timestamp()");
+                }})
+            .execute();
+
+        System.out.println("Calculated Race Results Merge Successful.");
+        spark.stop();
+    }
+}
+
 # Databricks notebook source
 dbutils.widgets.text("p_file_date", "2021-03-21")
 v_file_date = dbutils.widgets.get("p_file_date")
