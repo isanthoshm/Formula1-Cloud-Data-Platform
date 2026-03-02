@@ -1,3 +1,77 @@
+import org.apache.spark.sql.*;
+import static org.apache.spark.sql.functions.*;
+
+public class TransformRaceResults {
+    public static void main(String[] args) {
+
+        SparkSession spark = SparkSession.builder()
+                .appName("TransformRaceResults")
+                .getOrCreate();
+
+        // Parameters
+        String vFileDate = spark.conf().get("p_file_date", "2021-03-21");
+        String processedPath = "wasbs://processed@formula420.blob.core.windows.net";
+        String presentationPath = "wasbs://presentation@formula420.blob.core.windows.net";
+
+        // ##### Step 1 - Read and Rename Processed Data
+        Dataset<Row> driversDf = spark.read().format("delta").load(processedPath + "/drivers")
+                .withColumnRenamed("number", "driver_number")
+                .withColumnRenamed("name", "driver_name")
+                .withColumnRenamed("nationality", "driver_nationality");
+
+        Dataset<Row> constructorsDf = spark.read().format("delta").load(processedPath + "/constructors")
+                .withColumnRenamed("name", "team");
+
+        Dataset<Row> circuitsDf = spark.read().format("delta").load(processedPath + "/circuits")
+                .withColumnRenamed("location", "circuit_location");
+
+        Dataset<Row> racesDf = spark.read().format("delta").load(processedPath + "/races")
+                .withColumnRenamed("name", "race_name")
+                .withColumnRenamed("race_timestamp", "race_date");
+
+        Dataset<Row> resultsDf = spark.read().format("delta").load(processedPath + "/results")
+                .filter(col("file_date").equalTo(vFileDate))
+                .withColumnRenamed("time", "race_time")
+                .withColumnRenamed("race_id", "result_race_id")
+                .withColumnRenamed("file_date", "result_file_date");
+
+        // ##### Step 2 - Join Circuits to Races
+        Dataset<Row> raceCircuitsDf = racesDf.join(circuitsDf, racesDf.col("circuit_id").equalTo(circuitsDf.col("circuit_id")), "inner")
+                .select(racesDf.col("race_id"), racesDf.col("race_year"), racesDf.col("race_name"), 
+                        racesDf.col("race_date"), circuitsDf.col("circuit_location"));
+
+        // ##### Step 3 - Join Results to all other entities
+        Dataset<Row> raceResultsDf = resultsDf
+                .join(raceCircuitsDf, resultsDf.col("result_race_id").equalTo(raceCircuitsDf.col("race_id")))
+                .join(driversDf, resultsDf.col("driver_id").equalTo(driversDf.col("driver_id")))
+                .join(constructorsDf, resultsDf.col("constructor_id").equalTo(constructorsDf.col("constructor_id")));
+
+        // ##### Step 4 - Select Final Columns and Add Metadata
+        Dataset<Row> finalDf = raceResultsDf.select(
+                col("race_id"), col("race_year"), col("race_name"), col("race_date"), 
+                col("circuit_location"), col("driver_name"), col("driver_number"), 
+                col("driver_nationality"), col("team"), col("grid"), col("fastest_lap"), 
+                col("race_time"), col("points"), col("position"), col("result_file_date").as("file_date")
+        ).withColumn("created_date", current_timestamp());
+
+        // ##### Step 5 - Delta Merge using Utility
+        String mergeCondition = "tgt.driver_name = src.driver_name AND tgt.race_id = src.race_id";
+        
+        SparkUtils.mergeDeltaData(
+            spark, 
+            finalDf, 
+            "f1_presentation", 
+            "race_results", 
+            presentationPath, 
+            mergeCondition, 
+            "race_id"
+        );
+
+        System.out.println("Race Results Transformation Completed.");
+        spark.stop();
+    }
+}
+
 # Databricks notebook source
 dbutils.widgets.text("p_file_date", "2021-03-21")
 v_file_date = dbutils.widgets.get("p_file_date")
