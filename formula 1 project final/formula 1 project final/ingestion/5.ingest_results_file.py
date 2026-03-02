@@ -1,3 +1,91 @@
+import org.apache.spark.sql.*;
+import org.apache.spark.sql.types.*;
+import static org.apache.spark.sql.functions.*;
+
+public class IngestResults {
+    public static void main(String[] args) {
+
+        // Initialize Spark Session
+        SparkSession spark = SparkSession.builder()
+                .appName("IngestResults")
+                .getOrCreate();
+
+        // Parameters
+        String vDataSource = spark.conf().get("p_data_source", "");
+        String vFileDate = spark.conf().get("p_file_date", "2021-03-28");
+        String rawFolderPath = "wasbs://raw@formula420.blob.core.windows.net";
+        String processedFolderPath = "wasbs://processed@formula420.blob.core.windows.net";
+
+        // ##### Step 1 - Define Schema
+        StructType resultsSchema = new StructType(new StructField[]{
+                DataTypes.createStructField("resultId", DataTypes.IntegerType, false),
+                DataTypes.createStructField("raceId", DataTypes.IntegerType, true),
+                DataTypes.createStructField("driverId", DataTypes.IntegerType, true),
+                DataTypes.createStructField("constructorId", DataTypes.IntegerType, true),
+                DataTypes.createStructField("number", DataTypes.IntegerType, true),
+                DataTypes.createStructField("grid", DataTypes.IntegerType, true),
+                DataTypes.createStructField("position", DataTypes.IntegerType, true),
+                DataTypes.createStructField("positionText", DataTypes.StringType, true),
+                DataTypes.createStructField("positionOrder", DataTypes.IntegerType, true),
+                DataTypes.createStructField("points", DataTypes.FloatType, true),
+                DataTypes.createStructField("laps", DataTypes.IntegerType, true),
+                DataTypes.createStructField("time", DataTypes.StringType, true),
+                DataTypes.createStructField("milliseconds", DataTypes.IntegerType, true),
+                DataTypes.createStructField("fastestLap", DataTypes.IntegerType, true),
+                DataTypes.createStructField("rank", DataTypes.IntegerType, true),
+                DataTypes.createStructField("fastestLapTime", DataTypes.StringType, true),
+                DataTypes.createStructField("fastestLapSpeed", DataTypes.FloatType, true),
+                DataTypes.createStructField("statusId", DataTypes.StringType, true)
+        });
+
+        // Read JSON
+        Dataset<Row> resultsDf = spark.read()
+                .schema(resultsSchema)
+                .json(rawFolderPath + "/" + vFileDate + "/results.json");
+
+        // ##### Step 2 - Rename Columns and Add Metadata
+        Dataset<Row> resultsWithColumnsDf = resultsDf
+                .withColumnRenamed("resultId", "result_id")
+                .withColumnRenamed("raceId", "race_id")
+                .withColumnRenamed("driverId", "driver_id")
+                .withColumnRenamed("constructorId", "constructor_id")
+                .withColumnRenamed("positionText", "position_text")
+                .withColumnRenamed("positionOrder", "position_order")
+                .withColumnRenamed("fastestLap", "fastest_lap")
+                .withColumnRenamed("fastestLapTime", "fastest_lap_time")
+                .withColumnRenamed("fastestLapSpeed", "fastest_lap_speed")
+                .withColumn("data_source", lit(vDataSource))
+                .withColumn("file_date", lit(vFileDate));
+
+        // Add ingestion date using utility
+        Dataset<Row> resultsWithIngestionDateDf = SparkUtils.addIngestionDate(resultsWithColumnsDf);
+
+        // ##### Step 3 - Drop statusId and De-dupe
+        Dataset<Row> resultsFinalDf = resultsWithIngestionDateDf.drop("statusId");
+        
+        // Deduplicate based on race_id and driver_id
+        Dataset<Row> resultsDedupedDf = resultsFinalDf.dropDuplicates("race_id", "driver_id");
+
+        // ##### Step 4 - Delta Merge
+        // Condition ensures we match on both result and race IDs
+        String mergeCondition = "tgt.result_id = src.result_id AND tgt.race_id = src.race_id";
+
+        SparkUtils.mergeDeltaData(
+            spark, 
+            resultsDedupedDf, 
+            "f1_processed", 
+            "results", 
+            processedFolderPath, 
+            mergeCondition, 
+            "race_id"
+        );
+
+        System.out.println("Results Ingestion and Delta Merge Successful");
+        spark.stop();
+    }
+}
+
+
 # Databricks notebook source
 # MAGIC %md
 # MAGIC ### Ingest results.json file
