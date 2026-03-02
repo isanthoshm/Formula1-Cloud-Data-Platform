@@ -1,3 +1,67 @@
+import org.apache.spark.sql.*;
+import org.apache.spark.sql.types.*;
+import static org.apache.spark.sql.functions.*;
+
+public class IngestDrivers {
+    public static void main(String[] args) {
+
+        // Initialize Spark Session
+        SparkSession spark = SparkSession.builder()
+                .appName("IngestDrivers")
+                .getOrCreate();
+
+        // Parameters
+        String vDataSource = spark.conf().get("p_data_source", "");
+        String vFileDate = spark.conf().get("p_file_date", "2021-03-21");
+        String rawFolderPath = "wasbs://raw@formula420.blob.core.windows.net";
+
+        // ##### Step 1 - Define Nested Schemas
+        // Inner schema for the 'name' object
+        StructType nameSchema = new StructType(new StructField[]{
+                DataTypes.createStructField("forename", DataTypes.StringType, true),
+                DataTypes.createStructField("surname", DataTypes.StringType, true)
+        });
+
+        // Main schema for drivers.json
+        StructType driversSchema = new StructType(new StructField[]{
+                DataTypes.createStructField("driverId", DataTypes.IntegerType, false),
+                DataTypes.createStructField("driverRef", DataTypes.StringType, true),
+                DataTypes.createStructField("number", DataTypes.IntegerType, true),
+                DataTypes.createStructField("code", DataTypes.StringType, true),
+                DataTypes.createStructField("name", nameSchema, true), // Nesting the nameSchema here
+                DataTypes.createStructField("dob", DataTypes.DateType, true),
+                DataTypes.createStructField("nationality", DataTypes.StringType, true),
+                DataTypes.createStructField("url", DataTypes.StringType, true)
+        });
+
+        // Read Nested JSON file
+        Dataset<Row> driversDf = spark.read()
+                .schema(driversSchema)
+                .json(rawFolderPath + "/" + vFileDate + "/drivers.json");
+
+        // ##### Step 2 - Transform and Add Columns
+        // Use concat and dot notation to flatten the name object
+        Dataset<Row> driversWithColumnsDf = SparkUtils.addIngestionDate(driversDf)
+                .withColumnRenamed("driverId", "driver_id")
+                .withColumnRenamed("driverRef", "driver_ref")
+                .withColumn("name", concat(col("name.forename"), lit(" "), col("name.surname")))
+                .withColumn("data_source", lit(vDataSource))
+                .withColumn("file_date", lit(vFileDate));
+
+        // ##### Step 3 - Drop Unwanted Columns
+        Dataset<Row> driversFinalDf = driversWithColumnsDf.drop("url");
+
+        // ##### Step 4 - Write to Delta Table
+        driversFinalDf.write()
+                .mode("overwrite")
+                .format("delta")
+                .saveAsTable("f1_processed.drivers");
+
+        System.out.println("Drivers Ingestion and Flattening Successful");
+        spark.stop();
+    }
+}
+
 # Databricks notebook source
 # MAGIC %md
 # MAGIC ### Ingest drivers.json file
