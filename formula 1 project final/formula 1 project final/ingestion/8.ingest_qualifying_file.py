@@ -1,3 +1,69 @@
+
+import org.apache.spark.sql.*;
+import org.apache.spark.sql.types.*;
+import static org.apache.spark.sql.functions.*;
+
+public class IngestQualifying {
+    public static void main(String[] args) {
+
+        // Initialize Spark Session
+        SparkSession spark = SparkSession.builder()
+                .appName("IngestQualifying")
+                .getOrCreate();
+
+        // Parameters
+        String vDataSource = spark.conf().get("p_data_source", "");
+        String vFileDate = spark.conf().get("p_file_date", "2021-03-21");
+        String rawFolderPath = "wasbs://raw@formula420.blob.core.windows.net";
+        String processedFolderPath = "wasbs://processed@formula420.blob.core.windows.net";
+
+        // ##### Step 1 - Define Schema
+        StructType qualifyingSchema = new StructType(new StructField[]{
+                DataTypes.createStructField("qualifyId", DataTypes.IntegerType, false),
+                DataTypes.createStructField("raceId", DataTypes.IntegerType, true),
+                DataTypes.createStructField("driverId", DataTypes.IntegerType, true),
+                DataTypes.createStructField("constructorId", DataTypes.IntegerType, true),
+                DataTypes.createStructField("number", DataTypes.IntegerType, true),
+                DataTypes.createStructField("position", DataTypes.IntegerType, true),
+                DataTypes.createStructField("q1", DataTypes.StringType, true),
+                DataTypes.createStructField("q2", DataTypes.StringType, true),
+                DataTypes.createStructField("q3", DataTypes.StringType, true)
+        });
+
+        // Read multiple multi-line JSON files from the folder
+        Dataset<Row> qualifyingDf = spark.read()
+                .schema(qualifyingSchema)
+                .option("multiLine", true)
+                .json(rawFolderPath + "/" + vFileDate + "/qualifying");
+
+        // ##### Step 2 - Rename Columns and Add Metadata
+        Dataset<Row> finalDf = SparkUtils.addIngestionDate(qualifyingDf)
+                .withColumnRenamed("qualifyId", "qualify_id")
+                .withColumnRenamed("driverId", "driver_id")
+                .withColumnRenamed("raceId", "race_id")
+                .withColumnRenamed("constructorId", "constructor_id")
+                .withColumn("data_source", lit(vDataSource))
+                .withColumn("file_date", lit(vFileDate));
+
+        // ##### Step 3 - Delta Merge
+        // Unique key is qualify_id and race_id
+        String mergeCondition = "tgt.qualify_id = src.qualify_id AND tgt.race_id = src.race_id";
+
+        SparkUtils.mergeDeltaData(
+            spark, 
+            finalDf, 
+            "f1_processed", 
+            "qualifying", 
+            processedFolderPath, 
+            mergeCondition, 
+            "race_id"
+        );
+
+        System.out.println("Qualifying Ingestion and Merge Successful");
+        spark.stop();
+    }
+}
+
 # Databricks notebook source
 # MAGIC %md
 # MAGIC ### Ingest qualifying json files
