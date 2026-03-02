@@ -1,3 +1,65 @@
+import org.apache.spark.sql.*;
+import org.apache.spark.sql.types.*;
+import static org.apache.spark.sql.functions.*;
+
+public class IngestLapTimes {
+    public static void main(String[] args) {
+
+        // Initialize Spark Session
+        SparkSession spark = SparkSession.builder()
+                .appName("IngestLapTimes")
+                .getOrCreate();
+
+        // Parameters
+        String vDataSource = spark.conf().get("p_data_source", "");
+        String vFileDate = spark.conf().get("p_file_date", "2021-03-21");
+        String rawFolderPath = "wasbs://raw@formula420.blob.core.windows.net";
+        String processedFolderPath = "wasbs://processed@formula420.blob.core.windows.net";
+
+        // ##### Step 1 - Define Schema
+        StructType lapTimesSchema = new StructType(new StructField[]{
+                DataTypes.createStructField("raceId", DataTypes.IntegerType, false),
+                DataTypes.createStructField("driverId", DataTypes.IntegerType, true),
+                DataTypes.createStructField("lap", DataTypes.IntegerType, true),
+                DataTypes.createStructField("position", DataTypes.IntegerType, true),
+                DataTypes.createStructField("time", DataTypes.StringType, true),
+                DataTypes.createStructField("milliseconds", DataTypes.IntegerType, true)
+        });
+
+        // Read the entire folder of CSV files
+        // Spark automatically discovers all CSV files within the 'lap_times' directory
+        Dataset<Row> lapTimesDf = spark.read()
+                .schema(lapTimesSchema)
+                .csv(rawFolderPath + "/" + vFileDate + "/lap_times");
+
+        // ##### Step 2 - Rename Columns and Add Metadata
+        Dataset<Row> finalDf = SparkUtils.addIngestionDate(lapTimesDf)
+                .withColumnRenamed("driverId", "driver_id")
+                .withColumnRenamed("raceId", "race_id")
+                .withColumn("data_source", lit(vDataSource))
+                .withColumn("file_date", lit(vFileDate));
+
+        // ##### Step 3 - Delta Merge
+        // Condition: Unique key is race_id, driver_id, and lap number
+        String mergeCondition = "tgt.race_id = src.race_id AND " +
+                                "tgt.driver_id = src.driver_id AND " +
+                                "tgt.lap = src.lap";
+
+        SparkUtils.mergeDeltaData(
+            spark, 
+            finalDf, 
+            "f1_processed", 
+            "lap_times", 
+            processedFolderPath, 
+            mergeCondition, 
+            "race_id"
+        );
+
+        System.out.println("Lap Times Ingestion and Merge Successful");
+        spark.stop();
+    }
+}
+
 # Databricks notebook source
 # MAGIC %md
 # MAGIC ### Ingest lap_times folder
