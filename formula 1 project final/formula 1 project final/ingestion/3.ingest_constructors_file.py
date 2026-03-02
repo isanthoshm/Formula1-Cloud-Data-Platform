@@ -1,3 +1,61 @@
+import org.apache.spark.sql.*;
+import org.apache.spark.sql.types.*;
+import static org.apache.spark.sql.functions.*;
+
+public class IngestConstructors {
+    public static void main(String[] args) {
+
+        // Initialize Spark Session
+        SparkSession spark = SparkSession.builder()
+                .appName("IngestConstructors")
+                .getOrCreate();
+
+        // Parameters
+        String vDataSource = spark.conf().get("p_data_source", "");
+        String vFileDate = spark.conf().get("p_file_date", "2021-03-21");
+        String rawFolderPath = "wasbs://raw@formula420.blob.core.windows.net";
+
+        // ##### Step 1 - Define Schema
+        // You can use a DDL string in Java too: 
+        // String constructorsSchemaDDL = "constructorId INT, constructorRef STRING, name STRING, nationality STRING, url STRING";
+        
+        StructType constructorsSchema = new StructType(new StructField[]{
+                DataTypes.createStructField("constructorId", DataTypes.IntegerType, false),
+                DataTypes.createStructField("constructorRef", DataTypes.StringType, true),
+                DataTypes.createStructField("name", DataTypes.StringType, true),
+                DataTypes.createStructField("nationality", DataTypes.StringType, true),
+                DataTypes.createStructField("url", DataTypes.StringType, true)
+        });
+
+        // Read JSON file
+        Dataset<Row> constructorDf = spark.read()
+                .schema(constructorsSchema)
+                .json(rawFolderPath + "/" + vFileDate + "/constructors.json");
+
+        // ##### Step 2 - Drop unwanted columns
+        Dataset<Row> constructorDroppedDf = constructorDf.drop("url");
+
+        // ##### Step 3 - Rename columns and add Metadata
+        Dataset<Row> constructorRenamedDf = constructorDroppedDf
+                .withColumnRenamed("constructorId", "constructor_id")
+                .withColumnRenamed("constructorRef", "constructor_ref")
+                .withColumn("data_source", lit(vDataSource))
+                .withColumn("file_date", lit(vFileDate));
+
+        // Add ingestion date using our SparkUtils helper
+        Dataset<Row> constructorFinalDf = SparkUtils.addIngestionDate(constructorRenamedDf);
+
+        // ##### Step 4 - Write to Delta Table
+        constructorFinalDf.write()
+                .mode("overwrite")
+                .format("delta")
+                .saveAsTable("f1_processed.constructors");
+
+        System.out.println("Constructors Ingestion Successful");
+        spark.stop();
+    }
+}
+
 # Databricks notebook source
 # MAGIC %md
 # MAGIC ### Ingest constructors.json file
